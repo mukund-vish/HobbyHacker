@@ -188,14 +188,11 @@ deny_list:
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ Working on
 
-- [ ] Web UI for tool selection
-- [ ] Session recording & replay
-- [ ] Multi-agent mode (recon agent → exploit agent → report agent)
-- [ ] Findings export to SARIF / Markdown / PDF
-- [ ] Plugin API for custom tools
-- [ ] Scoped API allow-list for exfiltration
+- Python Script to setup a basic ubuntu env with basic tools
+- That container should be able to connect with model
+- Model should be able to choose and access tools
 
 ---
 
