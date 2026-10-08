@@ -1,47 +1,66 @@
+import pathlib
 import docker
 
-client = docker.from_env()
 
-IMAGE = "ubuntu:22.04"
-client.images.pull(IMAGE)
-print(f"Pulled {IMAGE}\n")
+BASE_IMG_TAG = "hobbyhacker-base:latest"
+ROOT = pathlib.Path(__file__).parent
 
-script = r"""
-set -e
-export DEBIAN_FRONTEND=noninteractive
 
-# ---- Install tools (silent) ----
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends \
-    ca-certificates curl wget git vim less jq unzip \
-    net-tools iproute2 iputils-ping dnsutils whois traceroute \
-    netcat-openbsd socat telnet tcpdump \
-    nmap \
-    openssh-client \
-    python3 python3-pip \
-    >/dev/null 2>&1
+def build_base(client, force=False):
+    try:
+        if not force:
+            client.images.get(BASE_IMG_TAG)
+            print(f"[+] Base Image {BASE_IMG_TAG} already exists. Skipping the build....")
+            return BASE_IMG_TAG
+    except docker.errors.ImageNotFound:
+        pass
+    
+    print(f"[+] Building {BASE_IMG_TAG} from Dockerfile...")
+    image, logs = client.images.build(
+            path=str(ROOT),
+            tag=BASE_IMG_TAG,
+            rm=True,
+        )
+        
+    for chunks in logs:
+            if "stream" in chunks:
+                print(chunks["stream"],end="")
+        
+    print(f"[+] Built {BASE_IMG_TAG}")
+    return BASE_IMG_TAG
 
-echo "=== Tools ready, starting work ===\n"
+def start_env(client, image=BASE_IMG_TAG, memory_limit="2g", cpu_limit=2.0):
+    container = client.containers.run(
+        image,
+        detach=True,
+        remove=False,
+        cap_add=["NET_RAW", "NET_ADMIN"],
+        mem_limit=memory_limit,
+        nano_cpus=int(cpu_limit * 1e9),
+        extra_hosts={"host.docker.internal": "host-gateway"},
+        network="bridge",
+    )
+    print(f"[+] Sandbox Started : {container.short_id}")
+    return container
 
-# ---- Pentest commands ----
-nmap --version | head -n 1
-echo
-echo "--- DNS lookup ---"
-getent hosts example.com || true
-echo
-echo "--- HTTP headers ---"
-curl -sI https://example.com | head -n 5
-echo
-echo "--- Python check ---"
-python3 -c "import socket; print('local ip:', socket.gethostbyname(socket.gethostname()))"
-"""
+def exec_in_env(container, command):
+    result = container.exec_run(["bash", "-lc", command], demux=False)
+    return result.exit_code, result.output.decode(errors="replace")
 
-output = client.containers.run(
-    IMAGE,
-    ["bash", "-c", script],
-    remove=True,                      
-    cap_add=["NET_RAW", "NET_ADMIN"], 
-)
+def stop_env(container):
+    try:
+        container.remove(force=True)
+        print(f"[+] Sandbox {container.short_id} removed.")
+    except docker.errors.NotFound:
+        pass
+    
 
-print(output.decode())
-print("Container removed.")
+if __name__ == "__main__":
+    client = docker.from_env()
+    build_base(client)
+    c = start_env(client)
+    try:
+        rc, out = exec_in_env(c, "curl --version | head -n 1")
+        print(f"rc={rc}  output={out.strip()}")
+    finally:
+        stop_env(c)
